@@ -1,0 +1,34 @@
+# Example crontab used in the README.
+# Try: cronlens jobs examples/sample.crontab
+SHELL=/bin/bash
+MAILTO=ops@example.com
+
+# Rotate application logs
+0 0 * * * /usr/local/bin/rotate-logs
+
+# Nightly database backup
+30 2 * * * /opt/scripts/backup-db.sh --full
+
+# Refresh the search index
+*/15 * * * * /opt/app/bin/reindex --incremental
+
+# Weekly report for the team
+0 9 * * mon /opt/app/bin/weekly-report
+
+# Purge temp files older than a week
+0 0 * * * find /tmp -type f -mtime +7 -delete
+
+# Health check ping
+* * * * * curl -fsS https://status.example.com/ping > /dev/null
+
+# February month-end invoices
+0 6 30 2 * /opt/app/bin/invoices --month-end
+
+@reboot /opt/app/bin/start-workers
+
+CRON_TZ=America/New_York
+# Snapshot prices at the US market open
+30 9 * * 1-5 /opt/app/bin/market-snapshot
+
+# Hourly cache warmup
+0 25 * * * /opt/app/bin/warm-cache

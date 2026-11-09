@@ -3,12 +3,18 @@ from datetime import timedelta
 import pytest
 from click.testing import CliRunner
 
-from cronlens import __version__
+from cronlens import __version__, cli
 from cronlens.cli import humanize_delta, main
 
 
 def run(*args):
     return CliRunner().invoke(main, list(args))
+
+
+@pytest.fixture
+def wide_console(monkeypatch):
+    """Stop rich from wrapping table rows at the default 80 columns."""
+    monkeypatch.setattr(cli.console, "width", 200)
 
 
 def test_version():
@@ -83,6 +89,46 @@ class TestNext:
         result = run("next", "* * * * *", "--from", "yesterday")
         assert result.exit_code == 2
         assert "ISO 8601" in result.output
+
+
+CRONTAB = """\
+# Nightly backup
+30 2 * * * /opt/backup.sh
+@reboot /opt/start.sh
+CRON_TZ=Mars/Base
+0 9 * * * /opt/report.sh
+0 0 30 2 * /opt/never.sh
+0 99 * * * /opt/broken.sh
+"""
+
+
+class TestJobs:
+    @pytest.fixture
+    def crontab_path(self, tmp_path):
+        path = tmp_path / "crontab"
+        path.write_text(CRONTAB, encoding="utf-8")
+        return path
+
+    def test_lists_jobs(self, crontab_path, wide_console):
+        result = run("jobs", str(crontab_path), "--tz", "UTC", "--from", "2026-11-09T00:00")
+        assert result.exit_code == 0
+        lines = result.stdout.splitlines()
+        backup = next(line for line in lines if "Nightly backup" in line)
+        assert "At 02:30" in backup
+        assert "Mon 2026-11-09 02:30 UTC" in backup
+        assert "At system startup" in result.stdout
+        assert "unknown CRON_TZ 'Mars/Base'" in result.stdout
+        assert "never" in next(line for line in lines if "/opt/never.sh" in line)
+
+    def test_reports_unparseable_lines(self, crontab_path):
+        result = run("jobs", str(crontab_path))
+        assert "warning:" in result.stderr
+        assert ":7: hour value 99 is out of range" in result.stderr
+
+    def test_reads_stdin(self):
+        result = CliRunner().invoke(main, ["jobs", "-"], input="@hourly /opt/tick.sh\n")
+        assert result.exit_code == 0
+        assert "/opt/tick.sh" in result.stdout
 
 
 @pytest.mark.parametrize(

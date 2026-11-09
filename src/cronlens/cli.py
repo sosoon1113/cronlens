@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone, tzinfo
+from typing import TextIO
 
 import click
 from rich import box
@@ -11,14 +12,16 @@ from rich.markup import escape
 from rich.table import Table
 
 from cronlens import __version__
+from cronlens.crontab import CronJob, Crontab, parse_crontab
 from cronlens.describe import compact_values, describe
 from cronlens.errors import CronLensError
 from cronlens.expression import CronExpression
 from cronlens.parser import parse
-from cronlens.schedule import next_runs
+from cronlens.schedule import next_run, next_runs
 from cronlens.timezones import get_zone
 
 console = Console(highlight=False)
+err_console = Console(stderr=True, highlight=False)
 
 
 class InputError(click.ClickException):
@@ -37,6 +40,7 @@ def main() -> None:
     \b
         cronlens explain "*/15 9-17 * * 1-5"
         cronlens next "0 3 * * sun" --tz Europe/Berlin
+        crontab -l | cronlens jobs -
     """
 
 
@@ -78,6 +82,45 @@ def next_command(
         raise click.ClickException(f"{expr.source!r} never fires")
     for run in runs:
         console.print(f"{format_run(run)}  [dim]{humanize_delta(_elapsed(start, run))}[/dim]")
+
+
+@main.command()
+@click.argument("crontab_file", metavar="CRONTAB", type=click.File("r", encoding="utf-8"))
+@click.option("--system", is_flag=True, help="Parse as a system crontab (with a user column).")
+@click.option("--tz", "tz_name", metavar="ZONE", help="IANA timezone (default: local time).")
+@click.option("--from", "start_text", metavar="DATETIME", help="ISO 8601 start (default: now).")
+def jobs(crontab_file: TextIO, system: bool, tz_name: str | None, start_text: str | None) -> None:
+    """List the jobs in CRONTAB with a description and their next run.
+
+    Use - as CRONTAB to read from standard input.
+    """
+    crontab = _read_crontab(crontab_file, system)
+    zone = _resolve_zone(tz_name)
+    start = _resolve_start(start_text, zone)
+
+    table = Table(box=box.SIMPLE_HEAD, pad_edge=False)
+    table.add_column("Line", justify="right", style="dim")
+    table.add_column("Schedule", no_wrap=True)
+    table.add_column("When")
+    table.add_column("Next run")
+    table.add_column("Job")
+    for job in crontab.jobs:
+        if job.expression is None:
+            when, upcoming = "At system startup", "-"
+        else:
+            when = describe(job.expression)
+            job_zone = _job_zone(job, zone)
+            if job_zone is None:
+                upcoming = f"unknown CRON_TZ {job.timezone!r}"
+            else:
+                run = next_run(job.expression, start, job_zone)
+                upcoming = format_run(run) if run else "never"
+        table.add_row(
+            str(job.line), escape(job.schedule), when, escape(upcoming), escape(job.label)
+        )
+
+    console.print(table)
+    _report_issues(crontab)
 
 
 # ------------------------------------------------------------------- formatting
@@ -138,6 +181,28 @@ def _resolve_start(text: str | None, zone: tzinfo) -> datetime:
             f"invalid --from value {text!r}; expected ISO 8601 such as 2026-11-09T08:00"
         ) from None
     return moment if moment.tzinfo is not None else moment.replace(tzinfo=zone)
+
+
+def _read_crontab(handle: TextIO, system: bool) -> Crontab:
+    return parse_crontab(handle.read(), system=system, source=handle.name)
+
+
+def _job_zone(job: CronJob, default: tzinfo) -> tzinfo | None:
+    """The timezone a job runs in, or None if its CRON_TZ is invalid."""
+    if not job.timezone:
+        return default
+    try:
+        return get_zone(job.timezone)
+    except CronLensError:
+        return None
+
+
+def _report_issues(crontab: Crontab) -> None:
+    for issue in crontab.issues:
+        err_console.print(
+            f"[yellow]warning:[/yellow] {escape(crontab.source)}:{issue.line}: "
+            f"{escape(issue.message)}"
+        )
 
 
 def _elapsed(start: datetime, end: datetime) -> timedelta:
