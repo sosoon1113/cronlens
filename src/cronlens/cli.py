@@ -13,11 +13,12 @@ from rich.markup import escape
 from rich.table import Table
 
 from cronlens import __version__
-from cronlens.analyze import Severity, check_crontab
+from cronlens.analyze import Severity, busiest_hours, check_crontab, week_start, weekly_load
 from cronlens.crontab import CronJob, Crontab, parse_crontab
 from cronlens.describe import compact_values, describe
 from cronlens.errors import CronLensError
 from cronlens.expression import CronExpression
+from cronlens.heatmap import DAY_LABELS, render_heatmap, render_legend
 from cronlens.parser import parse
 from cronlens.schedule import next_run, next_runs
 from cronlens.timezones import get_zone
@@ -44,6 +45,7 @@ def main() -> None:
         cronlens next "0 3 * * sun" --tz Europe/Berlin
         crontab -l | cronlens jobs -
         cronlens check /etc/crontab --system
+        cronlens heatmap my.crontab --tz UTC
     """
 
 
@@ -193,6 +195,42 @@ _SEVERITY_STYLES = {
 }
 
 
+@main.command()
+@click.argument("crontab_file", metavar="CRONTAB", type=click.File("r", encoding="utf-8"))
+@click.option("--system", is_flag=True, help="Parse as a system crontab (with a user column).")
+@click.option("--tz", "tz_name", metavar="ZONE", help="IANA timezone (default: local time).")
+@click.option(
+    "--week-of", "week_text", metavar="DATE", help="Show the week containing DATE (default: now)."
+)
+@click.option("--ascii", "force_ascii", is_flag=True, help="Draw with plain ASCII characters.")
+def heatmap(
+    crontab_file: TextIO,
+    system: bool,
+    tz_name: str | None,
+    week_text: str | None,
+    force_ascii: bool,
+) -> None:
+    """Show how many jobs start in each hour of the week."""
+    crontab = _read_crontab(crontab_file, system)
+    zone = _resolve_zone(tz_name)
+    start = week_start(_resolve_start(week_text, zone, option="--week-of"))
+    grid = weekly_load(crontab.scheduled_jobs, start, zone)
+    unicode = not force_ascii and console.encoding.lower().startswith("utf")
+
+    console.print(f"Job starts per hour, week of {start:%Y-%m-%d} ({start.tzname()})\n")
+    console.print(render_heatmap(grid, unicode=unicode))
+    console.print()
+    console.print(render_legend(grid, unicode=unicode))
+
+    busiest = busiest_hours(grid)
+    if busiest:
+        cells = ", ".join(
+            f"{DAY_LABELS[day]} {hour:02d}:00 ({count})" for day, hour, count in busiest
+        )
+        console.print(f"Busiest hours: {cells}")
+    _report_issues(crontab)
+
+
 # ------------------------------------------------------------------- formatting
 
 
@@ -245,14 +283,14 @@ def _resolve_zone(name: str | None) -> tzinfo:
         raise InputError(str(exc)) from None
 
 
-def _resolve_start(text: str | None, zone: tzinfo) -> datetime:
+def _resolve_start(text: str | None, zone: tzinfo, *, option: str = "--from") -> datetime:
     if text is None:
         return datetime.now(zone)
     try:
         moment = datetime.fromisoformat(text)
     except ValueError:
         raise InputError(
-            f"invalid --from value {text!r}; expected ISO 8601 such as 2026-11-09T08:00"
+            f"invalid {option} value {text!r}; expected ISO 8601 such as 2026-11-09T08:00"
         ) from None
     return moment if moment.tzinfo is not None else moment.replace(tzinfo=zone)
 

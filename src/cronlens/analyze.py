@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone, tzinfo
+from datetime import datetime, time, timedelta, timezone, tzinfo
 from enum import Enum
 from itertools import combinations
 
@@ -97,6 +97,46 @@ def find_collisions(
     ]
     collisions.sort(key=lambda c: (-c.count, c.first.line, c.second.line))
     return collisions
+
+
+def week_start(moment: datetime) -> datetime:
+    """Return Monday 00:00 of the week containing *moment*, in the same timezone."""
+    monday = moment.date() - timedelta(days=moment.weekday())
+    return datetime.combine(monday, time(0), tzinfo=moment.tzinfo)
+
+
+def weekly_load(jobs: Iterable[CronJob], start: datetime, tz: tzinfo) -> list[list[int]]:
+    """Count job starts per hour for the week beginning at *start*.
+
+    Returns a 7x24 grid indexed as ``grid[weekday][hour]`` with Monday as
+    weekday 0, in the wall-clock time of *tz*. Jobs with an invalid
+    ``CRON_TZ`` are left out.
+    """
+    grid = [[0] * 24 for _ in range(7)]
+    end = start + timedelta(days=7)
+    for job in jobs:
+        if job.expression is None:
+            continue
+        try:
+            zone = get_zone(job.timezone) if job.timezone else tz
+        except CronLensError:
+            continue
+        for run in runs_between(job.expression, start, end, zone):
+            local = run.astimezone(tz)
+            grid[local.weekday()][local.hour] += 1
+    return grid
+
+
+def busiest_hours(grid: list[list[int]], limit: int = 3) -> list[tuple[int, int, int]]:
+    """Return up to *limit* ``(weekday, hour, count)`` cells with the most starts."""
+    cells = [
+        (weekday, hour, count)
+        for weekday, row in enumerate(grid)
+        for hour, count in enumerate(row)
+        if count
+    ]
+    cells.sort(key=lambda cell: (-cell[2], cell[0], cell[1]))
+    return cells[:limit]
 
 
 def check_crontab(

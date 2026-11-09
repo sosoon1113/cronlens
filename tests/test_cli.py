@@ -161,6 +161,31 @@ class TestCheck:
         assert "3 times in the next 3 days" in result.output
 
 
+class TestHeatmap:
+    def test_renders_grid(self, tmp_path, wide_console):
+        path = tmp_path / "crontab"
+        path.write_text("0 9 * * 1-5 a\n0 9 * * 1 b\n", encoding="utf-8")
+        result = run("heatmap", str(path), "--tz", "UTC", "--week-of", "2026-11-11")
+        assert result.exit_code == 0
+        assert "week of 2026-11-09 (UTC)" in result.output
+        assert "Mon  " in result.output
+        assert "Busiest hours: Mon 09:00 (2), Tue 09:00 (1), Wed 09:00 (1)" in result.output
+
+    def test_ascii_flag(self, tmp_path):
+        path = tmp_path / "crontab"
+        path.write_text("@hourly a\n", encoding="utf-8")
+        result = run("heatmap", str(path), "--tz", "UTC", "--ascii")
+        assert result.exit_code == 0
+        assert result.output.isascii()
+
+    def test_invalid_week(self, tmp_path):
+        path = tmp_path / "crontab"
+        path.write_text("@hourly a\n", encoding="utf-8")
+        result = run("heatmap", str(path), "--week-of", "next week")
+        assert result.exit_code == 2
+        assert "invalid --week-of value" in result.output
+
+
 @pytest.mark.parametrize(
     ("delta", "expected"),
     [
