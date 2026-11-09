@@ -1,5 +1,6 @@
 """cronlens - explain, preview and audit cron schedules."""
 
+from cronlens.describe import describe
 from cronlens.errors import CronLensError, CronParseError
 from cronlens.expression import CronExpression, CronField
 from cronlens.parser import parse
@@ -12,6 +13,7 @@ __all__ = [
     "CronField",
     "CronLensError",
     "CronParseError",
+    "describe",
     "iter_runs",
     "matches",
     "next_run",
