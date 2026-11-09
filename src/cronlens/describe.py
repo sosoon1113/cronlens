@@ -138,12 +138,18 @@ def _hour_clause(hour: CronField, *, minute_repeats: bool) -> str:
 
 
 def _day_clause(dom: CronField, dow: CronField) -> str:
-    parts = []
-    if not dom.is_full:
-        parts.append(_dom_phrase(dom))
-    if not dow.is_full:
-        parts.append(_dow_phrase(dow))
-    return ", " + " and ".join(parts) if parts else ""
+    either_matches = not (dom.is_wildcard or dow.is_wildcard)  # see schedule.day_matches
+    if either_matches and (dom.is_full or dow.is_full):
+        return ""  # e.g. "1-31" OR "mon" matches every day
+
+    dom_text = None if dom.is_full else _dom_phrase(dom)
+    dow_text = None if dow.is_full else _dow_phrase(dow)
+    if dom_text and dow_text:
+        if either_matches:
+            return f", {dom_text} or {dow_text}"
+        return f", {dom_text}, but only {dow_text}"
+    text = dom_text or dow_text
+    return f", {text}" if text else ""
 
 
 def _dom_phrase(dom: CronField) -> str:

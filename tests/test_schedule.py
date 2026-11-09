@@ -128,6 +128,37 @@ class TestMatching:
         assert not day_matches(expr, date(2026, 12, 5))
 
 
+class TestDayOfMonthAndWeekday:
+    """Cron ORs the two day fields when both are restricted."""
+
+    def test_either_field_matches(self):
+        runs = next_runs(parse("0 0 13 * 5"), at(2026, 11, 9), count=6)
+        assert fmt(runs) == [
+            "2026-11-13 00:00",  # Friday the 13th
+            "2026-11-20 00:00",
+            "2026-11-27 00:00",
+            "2026-12-04 00:00",
+            "2026-12-11 00:00",
+            "2026-12-13 00:00",  # a Sunday, but the 13th
+        ]
+
+    def test_first_of_month_or_monday(self):
+        runs = next_runs(parse("0 0 1 * mon"), at(2026, 11, 25), count=3)
+        assert fmt(runs) == ["2026-11-30 00:00", "2026-12-01 00:00", "2026-12-07 00:00"]
+
+    def test_star_prefixed_field_keeps_and_semantics(self):
+        # "*/2" starts with "*", so cron requires both fields: odd days that are Mondays.
+        runs = next_runs(parse("0 0 */2 * 1"), at(2026, 11, 8), count=3)
+        assert fmt(runs) == ["2026-11-09 00:00", "2026-11-23 00:00", "2026-12-07 00:00"]
+
+    def test_full_range_without_star_matches_every_day(self):
+        runs = next_runs(parse("0 0 1-31 * 1"), at(2026, 11, 10), count=3)
+        assert fmt(runs) == ["2026-11-11 00:00", "2026-11-12 00:00", "2026-11-13 00:00"]
+
+    def test_impossible_day_is_rescued_by_weekday(self):
+        assert next_run(parse("0 0 30 2 mon"), at(2026, 11, 9)) is not None
+
+
 class TestRunsBetween:
     def test_interval_is_half_open(self):
         runs = runs_between(parse("0 * * * *"), at(2026, 11, 9, 0, 0), at(2026, 11, 9, 3, 0))

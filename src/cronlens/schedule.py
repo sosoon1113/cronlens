@@ -27,10 +27,20 @@ def cron_weekday(day: date) -> int:
 
 
 def day_matches(expr: CronExpression, day: date) -> bool:
-    """Return True if *expr* can fire at some time on *day*."""
+    """Return True if *expr* can fire at some time on *day*.
+
+    This follows the classic Vixie cron rule: when both day-of-month and
+    day-of-week are restricted (neither starts with ``*``) a day matches if
+    *either* field matches, so ``0 0 13 * 5`` fires on the 13th and on every
+    Friday. Otherwise both fields must match.
+    """
     if day.month not in expr.month:
         return False
-    return day.day in expr.day_of_month and cron_weekday(day) in expr.day_of_week
+    dom_ok = day.day in expr.day_of_month
+    dow_ok = cron_weekday(day) in expr.day_of_week
+    if expr.day_of_month.is_wildcard or expr.day_of_week.is_wildcard:
+        return dom_ok and dow_ok
+    return dom_ok or dow_ok
 
 
 def matches(expr: CronExpression, moment: datetime) -> bool:

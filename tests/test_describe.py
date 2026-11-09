@@ -62,6 +62,20 @@ def test_days(expression, expected):
 @pytest.mark.parametrize(
     ("expression", "expected"),
     [
+        ("0 0 13 * 5", "At 00:00, on the 13th of the month or on Friday"),
+        ("0 0 1 * mon", "At 00:00, on the 1st of the month or on Monday"),
+        ("0 0 */2 * 1", "At 00:00, on every 2nd day of the month, but only on Monday"),
+        ("0 0 1-31 * 1", "At 00:00"),
+        ("0 0 * * 1", "At 00:00, on Monday"),
+    ],
+)
+def test_day_of_month_and_weekday_combined(expression, expected):
+    assert describe(parse(expression)) == expected
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
         ("0 12 * 6-8 *", "At 12:00, in June through August"),
         ("0 0 * jan,jul *", "At 00:00, in January and July"),
         ("0 0 1 */3 *", "At 00:00, on the 1st of the month, every 3rd month"),
