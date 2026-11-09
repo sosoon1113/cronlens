@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timedelta, timezone, tzinfo
 from typing import TextIO
 
@@ -12,6 +13,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from cronlens import __version__
+from cronlens.analyze import Severity, check_crontab
 from cronlens.crontab import CronJob, Crontab, parse_crontab
 from cronlens.describe import compact_values, describe
 from cronlens.errors import CronLensError
@@ -41,6 +43,7 @@ def main() -> None:
         cronlens explain "*/15 9-17 * * 1-5"
         cronlens next "0 3 * * sun" --tz Europe/Berlin
         crontab -l | cronlens jobs -
+        cronlens check /etc/crontab --system
     """
 
 
@@ -123,6 +126,73 @@ def jobs(crontab_file: TextIO, system: bool, tz_name: str | None, start_text: st
     _report_issues(crontab)
 
 
+@main.command()
+@click.argument("crontab_file", metavar="CRONTAB", type=click.File("r", encoding="utf-8"))
+@click.option("--system", is_flag=True, help="Parse as a system crontab (with a user column).")
+@click.option("--tz", "tz_name", metavar="ZONE", help="IANA timezone (default: local time).")
+@click.option("--from", "start_text", metavar="DATETIME", help="ISO 8601 start (default: now).")
+@click.option(
+    "--days",
+    default=7,
+    show_default=True,
+    type=click.IntRange(1, 366),
+    help="How many days ahead to look for collisions.",
+)
+@click.option("--strict", is_flag=True, help="Treat warnings as failures.")
+@click.pass_context
+def check(
+    ctx: click.Context,
+    crontab_file: TextIO,
+    system: bool,
+    tz_name: str | None,
+    start_text: str | None,
+    days: int,
+    strict: bool,
+) -> None:
+    """Audit CRONTAB for invalid lines, impossible schedules and collisions.
+
+    Exits with status 1 when errors are found (or warnings, with --strict).
+    """
+    crontab = _read_crontab(crontab_file, system)
+    zone = _resolve_zone(tz_name)
+    start = _resolve_start(start_text, zone)
+    findings = check_crontab(crontab, start=start, tz=zone, days=days)
+
+    if findings:
+        table = Table(box=box.SIMPLE_HEAD, pad_edge=False)
+        table.add_column("Severity", no_wrap=True)
+        table.add_column("Line", justify="right", no_wrap=True)
+        table.add_column("Finding")
+        for finding in findings:
+            style = _SEVERITY_STYLES[finding.severity]
+            lines = ", ".join(str(line) for line in finding.lines)
+            table.add_row(
+                f"[{style}]{finding.severity.value}[/{style}]", lines, escape(finding.message)
+            )
+        console.print(table)
+
+    counts = Counter(finding.severity for finding in findings)
+    errors, warnings = counts[Severity.ERROR], counts[Severity.WARNING]
+    checked = _plural(len(crontab.jobs), "job")
+    if findings:
+        console.print(
+            f"{checked} checked: {_plural(errors, 'error')}, "
+            f"{_plural(warnings, 'warning')}, {_plural(counts[Severity.INFO], 'note')}"
+        )
+    else:
+        console.print(f"{checked} checked. No problems found.")
+
+    if errors or (strict and warnings):
+        ctx.exit(1)
+
+
+_SEVERITY_STYLES = {
+    Severity.ERROR: "bold red",
+    Severity.WARNING: "yellow",
+    Severity.INFO: "cyan",
+}
+
+
 # ------------------------------------------------------------------- formatting
 
 
@@ -141,6 +211,10 @@ def humanize_delta(delta: timedelta) -> str:
     if hours:
         return f"in {hours}h {minutes}m" if minutes else f"in {hours}h"
     return f"in {minutes}m"
+
+
+def _plural(count: int, noun: str) -> str:
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
 
 
 def _fields_table(expr: CronExpression) -> Table:

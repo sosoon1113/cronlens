@@ -131,6 +131,36 @@ class TestJobs:
         assert "/opt/tick.sh" in result.stdout
 
 
+class TestCheck:
+    def write(self, tmp_path, text):
+        path = tmp_path / "crontab"
+        path.write_text(text, encoding="utf-8")
+        return str(path)
+
+    def test_clean_crontab_passes(self, tmp_path):
+        path = self.write(tmp_path, "0 1 * * * a\n0 2 * * * b\n")
+        result = run("check", path, "--tz", "UTC")
+        assert result.exit_code == 0
+        assert "2 jobs checked. No problems found." in result.output
+
+    def test_errors_fail(self, tmp_path, wide_console):
+        path = self.write(tmp_path, "0 0 30 2 * never\n0 1 * * * ok\n")
+        result = run("check", path, "--tz", "UTC")
+        assert result.exit_code == 1
+        assert "never fires: day 30 never occurs in February" in result.output
+        assert "2 jobs checked: 1 error, 0 warnings, 0 notes" in result.output
+
+    def test_warnings_pass_unless_strict(self, tmp_path):
+        path = self.write(tmp_path, "0 0 * * * a\n0 0 * * * b\n")
+        assert run("check", path, "--tz", "UTC").exit_code == 0
+        assert run("check", path, "--tz", "UTC", "--strict").exit_code == 1
+
+    def test_days_option(self, tmp_path, wide_console):
+        path = self.write(tmp_path, "0 0 * * * a\n0 0 * * * b\n")
+        result = run("check", path, "--tz", "UTC", "--from", "2026-11-09T00:00", "--days", "3")
+        assert "3 times in the next 3 days" in result.output
+
+
 @pytest.mark.parametrize(
     ("delta", "expected"),
     [
