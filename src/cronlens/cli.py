@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from datetime import datetime, timedelta, timezone, tzinfo
 from typing import TextIO
@@ -49,14 +50,32 @@ def main() -> None:
     """
 
 
+json_option = click.option("--json", "as_json", is_flag=True, help="Print JSON instead of text.")
+
+
 @main.command()
 @click.argument("expression", nargs=-1, required=True)
 @click.option(
     "--fields", "show_fields", is_flag=True, help="Also show how each field was interpreted."
 )
-def explain(expression: tuple[str, ...], show_fields: bool) -> None:
+@json_option
+def explain(expression: tuple[str, ...], show_fields: bool, as_json: bool) -> None:
     """Describe EXPRESSION in plain English."""
     expr = _parse_expression(expression)
+    if as_json:
+        _emit_json(
+            {
+                "expression": expr.source,
+                "normalized": expr.normalized,
+                "description": describe(expr),
+                "fields": {
+                    field.spec.name: {"raw": field.raw, "values": field.sorted_values()}
+                    for field in expr.fields
+                },
+            }
+        )
+        return
+
     console.print(describe(expr))
     if show_fields:
         console.print(_fields_table(expr))
@@ -74,8 +93,13 @@ def explain(expression: tuple[str, ...], show_fields: bool) -> None:
 )
 @click.option("--tz", "tz_name", metavar="ZONE", help="IANA timezone (default: local time).")
 @click.option("--from", "start_text", metavar="DATETIME", help="ISO 8601 start (default: now).")
+@json_option
 def next_command(
-    expression: tuple[str, ...], count: int, tz_name: str | None, start_text: str | None
+    expression: tuple[str, ...],
+    count: int,
+    tz_name: str | None,
+    start_text: str | None,
+    as_json: bool,
 ) -> None:
     """List the next run times of EXPRESSION."""
     expr = _parse_expression(expression)
@@ -85,6 +109,17 @@ def next_command(
     runs = next_runs(expr, start, count, zone)
     if not runs:
         raise click.ClickException(f"{expr.source!r} never fires")
+    if as_json:
+        _emit_json(
+            {
+                "expression": expr.source,
+                "description": describe(expr),
+                "timezone": _zone_name(zone, start),
+                "from": start.isoformat(),
+                "runs": [run.isoformat() for run in runs],
+            }
+        )
+        return
     for run in runs:
         console.print(f"{format_run(run)}  [dim]{humanize_delta(_elapsed(start, run))}[/dim]")
 
@@ -94,7 +129,14 @@ def next_command(
 @click.option("--system", is_flag=True, help="Parse as a system crontab (with a user column).")
 @click.option("--tz", "tz_name", metavar="ZONE", help="IANA timezone (default: local time).")
 @click.option("--from", "start_text", metavar="DATETIME", help="ISO 8601 start (default: now).")
-def jobs(crontab_file: TextIO, system: bool, tz_name: str | None, start_text: str | None) -> None:
+@json_option
+def jobs(
+    crontab_file: TextIO,
+    system: bool,
+    tz_name: str | None,
+    start_text: str | None,
+    as_json: bool,
+) -> None:
     """List the jobs in CRONTAB with a description and their next run.
 
     Use - as CRONTAB to read from standard input.
@@ -102,6 +144,33 @@ def jobs(crontab_file: TextIO, system: bool, tz_name: str | None, start_text: st
     crontab = _read_crontab(crontab_file, system)
     zone = _resolve_zone(tz_name)
     start = _resolve_start(start_text, zone)
+    summaries = [(job, *_summarize_job(job, start, zone)) for job in crontab.jobs]
+
+    if as_json:
+        _emit_json(
+            {
+                "source": crontab.source,
+                "jobs": [
+                    {
+                        "line": job.line,
+                        "schedule": job.schedule,
+                        "command": job.command,
+                        "user": job.user,
+                        "label": job.label,
+                        "timezone": job.timezone,
+                        "description": description,
+                        "next_run": run.isoformat() if run else None,
+                        "note": note,
+                    }
+                    for job, description, run, note in summaries
+                ],
+                "issues": [
+                    {"line": issue.line, "text": issue.text, "message": issue.message}
+                    for issue in crontab.issues
+                ],
+            }
+        )
+        return
 
     table = Table(box=box.SIMPLE_HEAD, pad_edge=False)
     table.add_column("Line", justify="right", style="dim")
@@ -109,19 +178,10 @@ def jobs(crontab_file: TextIO, system: bool, tz_name: str | None, start_text: st
     table.add_column("When")
     table.add_column("Next run")
     table.add_column("Job")
-    for job in crontab.jobs:
-        if job.expression is None:
-            when, upcoming = "At system startup", "-"
-        else:
-            when = describe(job.expression)
-            job_zone = _job_zone(job, zone)
-            if job_zone is None:
-                upcoming = f"unknown CRON_TZ {job.timezone!r}"
-            else:
-                run = next_run(job.expression, start, job_zone)
-                upcoming = format_run(run) if run else "never"
+    for job, description, run, note in summaries:
+        upcoming = format_run(run) if run else (note or "-")
         table.add_row(
-            str(job.line), escape(job.schedule), when, escape(upcoming), escape(job.label)
+            str(job.line), escape(job.schedule), description, escape(upcoming), escape(job.label)
         )
 
     console.print(table)
@@ -141,6 +201,7 @@ def jobs(crontab_file: TextIO, system: bool, tz_name: str | None, start_text: st
     help="How many days ahead to look for collisions.",
 )
 @click.option("--strict", is_flag=True, help="Treat warnings as failures.")
+@json_option
 @click.pass_context
 def check(
     ctx: click.Context,
@@ -150,6 +211,7 @@ def check(
     start_text: str | None,
     days: int,
     strict: bool,
+    as_json: bool,
 ) -> None:
     """Audit CRONTAB for invalid lines, impossible schedules and collisions.
 
@@ -159,6 +221,23 @@ def check(
     zone = _resolve_zone(tz_name)
     start = _resolve_start(start_text, zone)
     findings = check_crontab(crontab, start=start, tz=zone, days=days)
+    counts = Counter(finding.severity for finding in findings)
+    errors, warnings = counts[Severity.ERROR], counts[Severity.WARNING]
+    failed = bool(errors or (strict and warnings))
+
+    if as_json:
+        _emit_json(
+            {
+                "source": crontab.source,
+                "jobs": len(crontab.jobs),
+                "passed": not failed,
+                "summary": {severity.value: counts[severity] for severity in Severity},
+                "findings": [finding.to_dict() for finding in findings],
+            }
+        )
+        if failed:
+            ctx.exit(1)
+        return
 
     if findings:
         table = Table(box=box.SIMPLE_HEAD, pad_edge=False)
@@ -173,8 +252,6 @@ def check(
             )
         console.print(table)
 
-    counts = Counter(finding.severity for finding in findings)
-    errors, warnings = counts[Severity.ERROR], counts[Severity.WARNING]
     checked = _plural(len(crontab.jobs), "job")
     if findings:
         console.print(
@@ -184,7 +261,7 @@ def check(
     else:
         console.print(f"{checked} checked. No problems found.")
 
-    if errors or (strict and warnings):
+    if failed:
         ctx.exit(1)
 
 
@@ -249,6 +326,29 @@ def humanize_delta(delta: timedelta) -> str:
     if hours:
         return f"in {hours}h {minutes}m" if minutes else f"in {hours}h"
     return f"in {minutes}m"
+
+
+def _emit_json(data: object) -> None:
+    click.echo(json.dumps(data, indent=2))
+
+
+def _zone_name(zone: tzinfo, moment: datetime) -> str:
+    """IANA key when available (``Europe/Berlin``), otherwise the abbreviation."""
+    return getattr(zone, "key", None) or moment.tzname() or str(zone)
+
+
+def _summarize_job(
+    job: CronJob, start: datetime, zone: tzinfo
+) -> tuple[str, datetime | None, str | None]:
+    """Return ``(description, next run, note)`` for a crontab job."""
+    if job.expression is None:
+        return "At system startup", None, None
+    description = describe(job.expression)
+    job_zone = _job_zone(job, zone)
+    if job_zone is None:
+        return description, None, f"unknown CRON_TZ {job.timezone!r}"
+    run = next_run(job.expression, start, job_zone)
+    return description, run, None if run else "never fires"
 
 
 def _plural(count: int, noun: str) -> str:

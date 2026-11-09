@@ -38,6 +38,14 @@ class Finding:
     message: str
     lines: tuple[int, ...] = ()
 
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "severity": self.severity.value,
+            "code": self.code,
+            "message": self.message,
+            "lines": list(self.lines),
+        }
+
 
 @dataclass(frozen=True)
 class Collision:

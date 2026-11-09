@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 
 import pytest
@@ -184,6 +185,68 @@ class TestHeatmap:
         result = run("heatmap", str(path), "--week-of", "next week")
         assert result.exit_code == 2
         assert "invalid --week-of value" in result.output
+
+
+class TestJsonOutput:
+    def test_explain(self):
+        result = run("explain", "--json", "@hourly")
+        data = json.loads(result.stdout)
+        assert data["expression"] == "@hourly"
+        assert data["normalized"] == "0 * * * *"
+        assert data["description"] == "At minute 0 past every hour"
+        assert data["fields"]["minute"] == {"raw": "0", "values": [0]}
+        assert data["fields"]["day-of-week"]["values"] == [0, 1, 2, 3, 4, 5, 6]
+
+    def test_next(self):
+        result = run(
+            "next",
+            "30 9 * * *",
+            "--json",
+            "-n",
+            "2",
+            "--tz",
+            "Europe/Berlin",
+            "--from",
+            "2026-11-09T12:00",
+        )
+        data = json.loads(result.stdout)
+        assert data["timezone"] == "Europe/Berlin"
+        assert data["from"] == "2026-11-09T12:00:00+01:00"
+        assert data["runs"] == ["2026-11-10T09:30:00+01:00", "2026-11-11T09:30:00+01:00"]
+
+    def test_jobs(self):
+        crontab = "# Ping\n*/5 * * * * ping\n@reboot boot\n0 0 30 2 * never\nbad line\n"
+        result = CliRunner().invoke(
+            main,
+            ["jobs", "-", "--json", "--tz", "UTC", "--from", "2026-11-09T00:00"],
+            input=crontab,
+        )
+        data = json.loads(result.stdout)
+        ping, boot, never = data["jobs"]
+        assert ping["label"] == "Ping"
+        assert ping["next_run"] == "2026-11-09T00:05:00+00:00"
+        assert boot["description"] == "At system startup"
+        assert boot["next_run"] is None
+        assert never["note"] == "never fires"
+        assert data["issues"][0]["line"] == 5
+
+    def test_check(self, tmp_path):
+        path = tmp_path / "crontab"
+        path.write_text("0 0 * * * a\n0 0 * * * b\n0 0 30 2 * c\n", encoding="utf-8")
+        result = run("check", str(path), "--json", "--tz", "UTC")
+        assert result.exit_code == 1
+        data = json.loads(result.stdout)
+        assert data["passed"] is False
+        assert data["summary"] == {"error": 1, "warning": 1, "info": 0}
+        assert [finding["code"] for finding in data["findings"]] == ["never-fires", "collision"]
+        assert data["findings"][1]["lines"] == [1, 2]
+
+    def test_check_passes(self, tmp_path):
+        path = tmp_path / "crontab"
+        path.write_text("0 1 * * * a\n", encoding="utf-8")
+        result = run("check", str(path), "--json")
+        assert result.exit_code == 0
+        assert json.loads(result.stdout)["passed"] is True
 
 
 @pytest.mark.parametrize(
