@@ -6,7 +6,7 @@ from cronlens.expression import CronExpression, CronField
 from cronlens.parser import parse
 from cronlens.schedule import iter_runs, matches, next_run, next_runs, runs_between
 
-__version__ = "0.1.0.dev0"
+__version__ = "0.1.0"
 
 __all__ = [
     "CronExpression",
