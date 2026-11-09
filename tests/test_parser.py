@@ -1,8 +1,8 @@
 import pytest
 
 from cronlens import CronParseError, parse
-from cronlens.fields import DAY_OF_WEEK, MINUTE
-from cronlens.parser import parse_field
+from cronlens.fields import DAY_OF_WEEK, MINUTE, MONTH
+from cronlens.parser import MACROS, parse_field
 
 
 def values(raw, spec=MINUTE):
@@ -54,6 +54,52 @@ class TestParseField:
         with pytest.raises(CronParseError) as info:
             parse_field(raw, MINUTE)
         assert info.value.field == "minute"
+
+
+class TestNames:
+    def test_month_names(self):
+        assert values("jan", MONTH) == [1]
+        assert values("JAN,Jul,dec", MONTH) == [1, 7, 12]
+
+    def test_month_name_range_with_step(self):
+        assert values("jan-dec/3", MONTH) == [1, 4, 7, 10]
+
+    def test_weekday_names(self):
+        assert values("mon-fri", DAY_OF_WEEK) == [1, 2, 3, 4, 5]
+        assert values("sat,sun", DAY_OF_WEEK) == [0, 6]
+
+    def test_names_mix_with_numbers(self):
+        assert values("1-wed", DAY_OF_WEEK) == [1, 2, 3]
+
+    def test_names_only_apply_to_their_field(self):
+        with pytest.raises(CronParseError):
+            parse_field("mon", MONTH)
+        with pytest.raises(CronParseError):
+            parse_field("jan", MINUTE)
+
+    def test_named_expression(self):
+        expr = parse("30 4 * jun-aug mon,wed")
+        assert expr.month.sorted_values() == [6, 7, 8]
+        assert expr.day_of_week.sorted_values() == [1, 3]
+
+
+class TestMacros:
+    @pytest.mark.parametrize("macro", sorted(MACROS))
+    def test_macros_expand(self, macro):
+        expr = parse(macro)
+        assert expr.source == macro
+        assert expr.normalized == MACROS[macro]
+
+    def test_macros_are_case_insensitive(self):
+        assert parse("@DAILY").normalized == "0 0 * * *"
+
+    def test_reboot_has_no_schedule(self):
+        with pytest.raises(CronParseError, match="startup"):
+            parse("@reboot")
+
+    def test_unknown_macro(self):
+        with pytest.raises(CronParseError, match="unknown macro"):
+            parse("@fortnightly")
 
 
 class TestParse:

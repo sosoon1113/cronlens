@@ -9,23 +9,41 @@ Supported syntax per field::
     10-40/10   every 10th value inside a range
     5/20       every 20th value starting at 5
     1,15,30    any comma-separated combination of the above
+
+Months and weekdays may also be written as three-letter names (``jan``,
+``mon-fri``), and the usual ``@daily``-style macros are expanded.
 """
 
 from __future__ import annotations
+
+from dataclasses import replace
 
 from cronlens.errors import CronParseError
 from cronlens.expression import CronExpression, CronField
 from cronlens.fields import FIELDS, FieldSpec
 
+#: Shorthand schedules understood by Vixie cron and its descendants.
+MACROS: dict[str, str] = {
+    "@yearly": "0 0 1 1 *",
+    "@annually": "0 0 1 1 *",
+    "@monthly": "0 0 1 * *",
+    "@weekly": "0 0 * * 0",
+    "@daily": "0 0 * * *",
+    "@midnight": "0 0 * * *",
+    "@hourly": "0 * * * *",
+}
+
 
 def parse(expression: str) -> CronExpression:
-    """Parse *expression*, e.g. ``"*/15 9-17 * * 1-5"``.
+    """Parse *expression*, e.g. ``"*/15 9-17 * * 1-5"`` or ``"@daily"``.
 
     Raises :class:`~cronlens.errors.CronParseError` if the expression is invalid.
     """
     source = expression.strip()
     if not source:
         raise CronParseError("expression is empty", expression=expression)
+    if source.startswith("@"):
+        return _parse_macro(source)
 
     parts = source.split()
     if len(parts) != len(FIELDS):
@@ -55,6 +73,20 @@ def parse_field(raw: str, spec: FieldSpec) -> CronField:
     return CronField(spec=spec, raw=raw, values=frozenset(values))
 
 
+def _parse_macro(source: str) -> CronExpression:
+    key = source.lower()
+    if key == "@reboot":
+        raise CronParseError(
+            "@reboot runs once at startup and has no time-based schedule",
+            expression=source,
+        )
+    try:
+        expanded = MACROS[key]
+    except KeyError:
+        raise CronParseError(f"unknown macro {source!r}", expression=source) from None
+    return replace(parse(expanded), source=source)
+
+
 def _parse_item(item: str, spec: FieldSpec) -> set[int]:
     base, has_step, step_text = item.partition("/")
     step = _parse_step(step_text, spec) if has_step else 1
@@ -78,6 +110,9 @@ def _parse_item(item: str, spec: FieldSpec) -> set[int]:
 
 
 def _parse_value(text: str, spec: FieldSpec) -> int:
+    named = spec.names.get(text.lower())
+    if named is not None:
+        return named
     if not text.isdigit():
         raise CronParseError(f"invalid value {text!r} in {spec.name} field", field=spec.name)
     value = int(text)
