@@ -26,3 +26,11 @@ class CronParseError(CronLensError, ValueError):
         self.message = message
         self.field = field
         self.expression = expression
+
+
+class UnknownTimezoneError(CronLensError, ValueError):
+    """Raised when a timezone name cannot be resolved."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"unknown timezone {name!r}")
+        self.name = name
