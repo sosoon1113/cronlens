@@ -411,9 +411,11 @@ def _job_zone(job: CronJob, default: tzinfo) -> tzinfo | None:
 
 def _report_issues(crontab: Crontab) -> None:
     for issue in crontab.issues:
+        # soft_wrap keeps "file:line: message" on one line, whatever the terminal width.
         err_console.print(
             f"[yellow]warning:[/yellow] {escape(crontab.source)}:{issue.line}: "
-            f"{escape(issue.message)}"
+            f"{escape(issue.message)}",
+            soft_wrap=True,
         )
 
 

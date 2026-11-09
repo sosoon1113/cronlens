@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- Crontab warnings (`file:line: message`) are no longer wrapped onto several lines
+  when the file path is long or the terminal is narrow.
+
 ## [0.1.0] - 2026-11-09
 
 First public release.

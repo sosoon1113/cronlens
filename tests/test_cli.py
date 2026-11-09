@@ -126,6 +126,16 @@ class TestJobs:
         assert "warning:" in result.stderr
         assert ":7: hour value 99 is out of range" in result.stderr
 
+    def test_warnings_are_never_wrapped(self, tmp_path):
+        # file:line: message lines must stay on one line so tools can parse them.
+        path = tmp_path / ("nested-directory-" * 5) / "crontab"
+        path.parent.mkdir()
+        path.write_text("0 99 * * * broken\n", encoding="utf-8")
+        result = run("jobs", str(path))
+        assert result.stderr.splitlines() == [
+            f"warning: {path}:1: hour value 99 is out of range (0-23)"
+        ]
+
     def test_reads_stdin(self):
         result = CliRunner().invoke(main, ["jobs", "-"], input="@hourly /opt/tick.sh\n")
         assert result.exit_code == 0
